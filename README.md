@@ -39,7 +39,7 @@ A API fica em `http://localhost:3000`. Verifique `/health`; a documentação Swa
 - `GET /v1/user/:id` — consulta usuário; `PUT` e `DELETE /v1/user/:id` permitem alterar ou remover apenas o próprio usuário.
 - `/v1/category/search` e `/v1/product/search` listam recursos com paginação e filtros.
 - `GET /v1/category/:id` e `GET /v1/product/:id` consultam por ID.
-- `POST`, `PUT` e `DELETE` em `/v1/category` e `/v1/product` exigem o cabeçalho `Authorization: Bearer token`.
+- `POST`, `PUT` e `DELETE` em `/v1/category` e `/v1/product` exigem autenticação JWT.
 
 O catálogo inicial contém oito produtos demonstrativos. Pagamentos e checkout real não fazem parte do projeto.
 
