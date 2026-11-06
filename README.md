@@ -104,50 +104,58 @@ Em 6 de novembro de 2026, a CI foi executada manualmente após a atualização e
 
 O projeto separado do backend foi criado na Vercel, conectado ao repositório GitHub e publicado em [store-backend-projeto.vercel.app](https://store-backend-projeto.vercel.app). A aplicação usa o Express detectado pelo Vercel e configura explicitamente o driver `mysql2` no Sequelize para garantir que ele seja incluído no bundle da função.
 
-Validações públicas realizadas:
+O MySQL de produção está hospedado no Railway e acessível pela API por meio do TCP Proxy. As variáveis de conexão e `JWT_SECRET` ficam configuradas no ambiente Production da Vercel; seus valores não devem ser incluídos neste repositório.
 
-- `GET /health` respondeu `{"status":"ok"}`.
-- `GET /api-docs` serviu a interface Swagger.
+As migrations `20261106000000-create-store-tables.js` e `20261106010000-normalize-product-option-values.js` estão registradas em `SequelizeMeta`, e as tabelas da API foram provisionadas no banco de produção. O seed demonstrativo também foi aplicado: 5 categorias, 8 produtos, 8 imagens, 13 vínculos de categoria e 38 valores de opções.
 
-Esses endpoints confirmam que a aplicação inicia e serve documentação; não confirmam uma conexão com o banco.
+Em 6 de novembro de 2026, foram validados no domínio de produção:
 
-Um serviço MySQL foi provisionado no Railway. Na última verificação, ainda faltava habilitar o acesso externo por TCP Proxy e inserir as variáveis de conexão no ambiente Production da Vercel. Portanto, **as migrations de produção ainda não foram aplicadas e os endpoints que consultam dados não foram validados contra esse banco**. O teste de integração anterior foi feito em um banco isolado; não modificou o banco local da usuária nem o banco hospedado.
+- `GET /health` respondeu HTTP 200.
+- `GET /api-docs` respondeu HTTP 200 e serviu o Swagger.
+- `GET /v1/category/search` respondeu HTTP 200 e retornou as 5 categorias do banco.
+- `GET /v1/product/search` respondeu HTTP 200 e retornou os 8 produtos do banco.
 
-### Configuração pendente do banco de produção
+O Railway pode cobrar tráfego de rede pública e, na última verificação, a conta indicava crédito limitado. Acompanhe uso e saldo no painel do provedor para evitar interrupções.
 
-1. No serviço MySQL do Railway, abra **Settings → Networking** e habilite **Public Access / TCP Proxy**. Use o host e a porta públicos fornecidos pelo Railway; as variáveis internas `MYSQLHOST` e `MYSQLPORT` não são acessíveis de fora do Railway. O tráfego pelo proxy pode gerar cobrança de rede; confira o uso e o plano antes de mantê-lo ativo.
-2. No projeto Vercel, adicione estas variáveis ao ambiente **Production**, sem colocá-las no Git:
+### Integração do frontend
 
-   | Variável no Vercel | Valor |
-   |---|---|
-   | `DB_HOST` | Host público do TCP Proxy |
-   | `DB_PORT` | Porta pública do TCP Proxy |
-   | `DB_NAME` | `MYSQLDATABASE` do Railway |
-   | `DB_USER` | `MYSQLUSER` do Railway |
-   | `DB_PASSWORD` | `MYSQLPASSWORD` do Railway |
-   | `JWT_SECRET` | Segredo aleatório com pelo menos 32 caracteres |
-   | `FRONTEND_URL` | URL pública do frontend, sem barra final |
+O frontend publicado em [frontend-projeto-scne.vercel.app](https://frontend-projeto-scne.vercel.app) consome os endpoints públicos de leitura desta API. A integração está documentada no [repositório do frontend](https://github.com/larissakcarvalho/frontend-projeto), no commit [`d13cade`](https://github.com/larissakcarvalho/frontend-projeto/commit/d13cade863bf4066a2b601e4aea44f70b2d5acf3).
 
-   Cadastre os valores diretamente nos painéis dos provedores. Não compartilhe senhas ou segredos em issues, commits ou conversas. Gere o `JWT_SECRET` localmente, por exemplo:
+Na inicialização, o frontend consulta `GET /v1/product/search?limit=-1` e `GET /v1/category/search?limit=-1`. A busca por texto, categoria, preço e ordenação acontece no cliente. O frontend usa `FRONTEND_URL` para autorizar sua origem via CORS; ao alterar o domínio público, atualize essa variável na Vercel e faça um novo deploy da API.
 
-   ```bash
-   node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"
-   ```
+Essa integração é somente de leitura: autenticação, cadastro, processamento de pedidos e checkout ainda não estão conectados ao frontend. Se a API ficar indisponível, a loja pode exibir seu catálogo local de demonstração.
 
-3. Faça um novo deploy de produção no Vercel para aplicar as variáveis. Acompanhe os logs de execução e confirme novamente `/health` e `/api-docs`.
-4. Antes de alterar o banco, confirme que `DB_HOST`, `DB_PORT` e `DB_NAME` apontam para o Railway de produção e que o serviço está disponível. Em um ambiente local seguro, configure temporariamente o `.env` com os valores de conexão e execute:
+### Variáveis de ambiente de produção
 
-   ```bash
-   npm run db:migrate -- --env production
-   ```
+As variáveis abaixo devem permanecer no ambiente Production da Vercel, nunca no Git:
 
-   O comando aplica todas as migrations pendentes, incluindo `20261106010000-normalize-product-option-values.js`. Não execute o seed sem querer: ele insere dados de demonstração no banco indicado. Para popular intencionalmente o catálogo:
+| Variável no Vercel | Uso |
+|---|---|
+| `DB_HOST` | Host público do TCP Proxy Railway |
+| `DB_PORT` | Porta pública do TCP Proxy Railway |
+| `DB_NAME` | Nome do banco no Railway |
+| `DB_USER` | Usuário do banco no Railway |
+| `DB_PASSWORD` | Senha do banco no Railway |
+| `JWT_SECRET` | Segredo aleatório com pelo menos 32 caracteres |
+| `FRONTEND_URL` | Origem do frontend autorizada por CORS, sem barra final |
 
-   ```bash
-   npm run db:seed -- --env production
-   ```
+Cadastre e altere os valores diretamente nos painéis dos provedores. Não compartilhe senhas ou segredos em issues, commits ou conversas. Gere o `JWT_SECRET` localmente, por exemplo:
 
-5. Valide operações que consultam dados, como `GET /v1/category/search` e `GET /v1/product/search`. Em caso de falha, consulte os logs do Vercel e a conectividade do TCP Proxy. Nunca compartilhe as credenciais durante o suporte.
+```bash
+node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"
+```
+
+Para aplicar alterações de configuração, faça um novo deploy de produção. Antes de executar migrations futuras, confirme que a conexão aponta para o banco correto. Em um ambiente local seguro, configure temporariamente o `.env` com os dados do ambiente de destino e execute:
+
+```bash
+npm run db:migrate -- --env production
+```
+
+O comando aplica apenas migrations ainda não registradas. O seed não é idempotente; execute-o somente quando quiser inserir o catálogo demonstrativo em um banco vazio:
+
+```bash
+npm run db:seed -- --env production
+```
 
 ### Imagens em produção
 
@@ -155,4 +163,4 @@ O backend aceita URLs HTTP(S), caminhos já salvos e imagens base64. O armazenam
 
 ### Escopo não incluído
 
-O frontend não está integrado a esta API. Não há checkout real, processamento de pagamentos nem configuração de credenciais de produção por código.
+Não há checkout real ou processamento de pagamentos. As imagens enviadas para `uploads/` não persistem entre execuções no ambiente serverless da Vercel; para este deploy, use URLs externas.
