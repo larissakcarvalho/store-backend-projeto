@@ -21,12 +21,11 @@ API REST da loja demonstrativa, organizada em rotas, controllers, models e middl
 2. Entre nesta pasta, instale as dependências e crie o arquivo de ambiente:
 
    ```bash
-   cd backend
    npm install
    cp .env.example .env
    ```
 
-   No Windows PowerShell, use `Copy-Item .env.example .env` no lugar de `cp`.
+   Execute os comandos na raiz deste repositório. No Windows PowerShell, use `Copy-Item .env.example .env` no lugar de `cp`.
 
 3. Configure `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER` e `DB_PASSWORD` no `.env`. Defina `JWT_SECRET` com uma chave aleatória de pelo menos 32 caracteres. Não versione o `.env`.
 
@@ -92,3 +91,68 @@ npm run test:db
 ```
 
 O workflow do GitHub Actions também executa os testes de contrato e persistência usando um serviço MySQL dedicado.
+
+## Publicação e implantação
+
+### GitHub
+
+O código-fonte do backend está no repositório independente [larissakcarvalho/store-backend-projeto](https://github.com/larissakcarvalho/store-backend-projeto), na branch `main`. O workflow [Backend CI](https://github.com/larissakcarvalho/store-backend-projeto/actions/workflows/backend.yml) instala as dependências, executa os testes, aplica migrations e seed em um MySQL de CI isolado e roda o teste de persistência.
+
+Em 6 de novembro de 2026, o histórico de commits da branch `main` foi reescrito para remover trailers de coautoria do Copilot. Os arquivos não foram alterados nessa operação. A CI foi executada manualmente após a atualização e passou: [execução 3](https://github.com/larissakcarvalho/store-backend-projeto/actions/runs/42226274108). Clones locais anteriores à reescrita devem sincronizar a branch com o remoto; se houver alterações locais, faça backup antes de atualizar.
+
+### Vercel e Railway
+
+O projeto separado do backend foi criado na Vercel, conectado ao repositório GitHub e publicado em [store-backend-projeto.vercel.app](https://store-backend-projeto.vercel.app). A aplicação usa o Express detectado pelo Vercel e configura explicitamente o driver `mysql2` no Sequelize para garantir que ele seja incluído no bundle da função.
+
+Validações públicas realizadas:
+
+- `GET /health` respondeu `{"status":"ok"}`.
+- `GET /api-docs` serviu a interface Swagger.
+
+Esses endpoints confirmam que a aplicação inicia e serve documentação; não confirmam uma conexão com o banco.
+
+Um serviço MySQL foi provisionado no Railway. Na última verificação, ainda faltava habilitar o acesso externo por TCP Proxy e inserir as variáveis de conexão no ambiente Production da Vercel. Portanto, **as migrations de produção ainda não foram aplicadas e os endpoints que consultam dados não foram validados contra esse banco**. O teste de integração anterior foi feito em um banco isolado; não modificou o banco local da usuária nem o banco hospedado.
+
+### Configuração pendente do banco de produção
+
+1. No serviço MySQL do Railway, abra **Settings → Networking** e habilite **Public Access / TCP Proxy**. Use o host e a porta públicos fornecidos pelo Railway; as variáveis internas `MYSQLHOST` e `MYSQLPORT` não são acessíveis de fora do Railway. O tráfego pelo proxy pode gerar cobrança de rede; confira o uso e o plano antes de mantê-lo ativo.
+2. No projeto Vercel, adicione estas variáveis ao ambiente **Production**, sem colocá-las no Git:
+
+   | Variável no Vercel | Valor |
+   |---|---|
+   | `DB_HOST` | Host público do TCP Proxy |
+   | `DB_PORT` | Porta pública do TCP Proxy |
+   | `DB_NAME` | `MYSQLDATABASE` do Railway |
+   | `DB_USER` | `MYSQLUSER` do Railway |
+   | `DB_PASSWORD` | `MYSQLPASSWORD` do Railway |
+   | `JWT_SECRET` | Segredo aleatório com pelo menos 32 caracteres |
+   | `FRONTEND_URL` | URL pública do frontend, sem barra final |
+
+   Cadastre os valores diretamente nos painéis dos provedores. Não compartilhe senhas ou segredos em issues, commits ou conversas. Gere o `JWT_SECRET` localmente, por exemplo:
+
+   ```bash
+   node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"
+   ```
+
+3. Faça um novo deploy de produção no Vercel para aplicar as variáveis. Acompanhe os logs de execução e confirme novamente `/health` e `/api-docs`.
+4. Antes de alterar o banco, confirme que `DB_HOST`, `DB_PORT` e `DB_NAME` apontam para o Railway de produção e que o serviço está disponível. Em um ambiente local seguro, configure temporariamente o `.env` com os valores de conexão e execute:
+
+   ```bash
+   npm run db:migrate -- --env production
+   ```
+
+   O comando aplica todas as migrations pendentes, incluindo `20261106010000-normalize-product-option-values.js`. Não execute o seed sem querer: ele insere dados de demonstração no banco indicado. Para popular intencionalmente o catálogo:
+
+   ```bash
+   npm run db:seed -- --env production
+   ```
+
+5. Valide operações que consultam dados, como `GET /v1/category/search` e `GET /v1/product/search`. Em caso de falha, consulte os logs do Vercel e a conectividade do TCP Proxy. Nunca compartilhe as credenciais durante o suporte.
+
+### Imagens em produção
+
+O backend aceita URLs HTTP(S), caminhos já salvos e imagens base64. O armazenamento de arquivos em `uploads/` é local e não persistente no ambiente serverless da Vercel. Para esta implantação, use URLs externas para as imagens; não dependa de uploads base64 gravados no disco do Vercel.
+
+### Escopo não incluído
+
+O frontend não está integrado a esta API. Não há checkout real, processamento de pagamentos nem configuração de credenciais de produção por código.
