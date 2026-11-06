@@ -12,6 +12,7 @@
     "db:seed": "sequelize-cli db:seed:all",
     "db:seed:undo": "sequelize-cli db:seed:undo:all",
     "test": "jest --runInBand",
+    "test:db": "jest --runInBand tests/persistence.test.js",
     "test:watch": "jest --watch"
   },
   "engines": {

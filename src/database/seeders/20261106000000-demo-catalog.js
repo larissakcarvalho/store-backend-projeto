@@ -51,20 +51,31 @@ module.exports = {
       enabled: true,
       path: product.image,
     })))
-    await queryInterface.bulkInsert('product_options', products
-      .filter((product) => product.sizes)
-      .map((product) => ({
-        product_id: product.id,
-        title: 'Tamanho',
-        shape: 'square',
-        radius: 3,
-        type: 'text',
-        values: product.sizes,
-      })))
+    const productsWithSizes = products.filter((product) => product.sizes)
+    await queryInterface.bulkInsert('product_options', productsWithSizes.map((product) => ({
+      product_id: product.id,
+      title: 'Tamanho',
+      shape: 'square',
+      radius: 3,
+      type: 'text',
+      values: product.sizes,
+    })))
+    const [options] = await queryInterface.sequelize.query(
+      `SELECT id, product_id FROM product_options WHERE product_id IN (${productsWithSizes
+        .map((product) => product.id).join(',')})`,
+    )
+    const sizesByProduct = new Map(products.map((product) => [product.id, product.sizes]))
+    await queryInterface.bulkInsert('product_option_values', options.flatMap((option) =>
+      sizesByProduct.get(option.product_id).split(',').map((value) => ({
+        option_id: option.id,
+        value,
+      })),
+    ))
   },
 
   async down(queryInterface) {
     await queryInterface.bulkDelete('product_categories', null, {})
+    await queryInterface.bulkDelete('product_option_values', null, {})
     await queryInterface.bulkDelete('product_options', null, {})
     await queryInterface.bulkDelete('product_images', null, {})
     await queryInterface.bulkDelete('products', null, {})

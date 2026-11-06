@@ -5,6 +5,7 @@ process.env.DB_HOST = process.env.DB_HOST || '127.0.0.1'
 process.env.JWT_SECRET = process.env.JWT_SECRET || 'test-secret-with-at-least-32-characters'
 
 const request = require('supertest')
+const { Op } = require('sequelize')
 const app = require('../src/app')
 const { Category, Product } = require('../src/models')
 
@@ -54,6 +55,20 @@ describe('API básica', () => {
     expect(response.status).toBe(200)
     expect(response.body).toEqual({ data: [], total: 0, limit: 2, page: 3 })
     expect(findProducts).toHaveBeenCalledWith(expect.objectContaining({ limit: 2, offset: 4 }))
+  })
+
+  test('combina filtros de opções diferentes na busca de produtos', async () => {
+    const findProducts = jest.spyOn(Product, 'findAndCountAll').mockResolvedValue({ rows: [], count: 0 })
+    const response = await request(app)
+      .get('/v1/product/search?option%5B10%5D=P&option%5B20%5D=Azul')
+
+    expect(response.status).toBe(200)
+    const query = findProducts.mock.calls[0][0]
+    expect(query.where[Op.and]).toHaveLength(2)
+    expect(query.where[Op.and].map((condition) => condition.logic[Op.in].val)).toEqual([
+      expect.stringContaining('WHERE po.id = 10'),
+      expect.stringContaining('WHERE po.id = 20'),
+    ])
   })
 
   test('valida parâmetros de paginação antes de consultar categorias', async () => {

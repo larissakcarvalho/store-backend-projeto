@@ -1,8 +1,16 @@
-const { Op, col, fn, where: sequelizeWhere } = require('sequelize')
-const { Category, Product, ProductImage, ProductOption, sequelize } = require('../models')
+const { Op } = require('sequelize')
+const {
+  Category,
+  Product,
+  ProductImage,
+  ProductOption,
+  ProductOptionValue,
+  sequelize,
+} = require('../models')
 const AppError = require('../utils/AppError')
 const asyncHandler = require('../utils/asyncHandler')
 const { parsePagination } = require('../utils/pagination')
+const { prepareImages, removePreparedImages } = require('../services/imageStorage')
 
 const productFields = [
   'id', 'enabled', 'name', 'slug', 'use_in_menu', 'stock', 'description',
@@ -11,7 +19,17 @@ const productFields = [
 const associations = [
   { model: Category, as: 'categories', through: { attributes: [] } },
   { model: ProductImage, as: 'images' },
-  { model: ProductOption, as: 'options' },
+  {
+    model: ProductOption,
+    as: 'options',
+    include: [{
+      model: ProductOptionValue,
+      as: 'optionValues',
+      attributes: ['value'],
+      separate: true,
+      order: [['id', 'ASC']],
+    }],
+  },
 ]
 
 function parseId(value) {
@@ -90,7 +108,10 @@ function normalizeOptions(options, partial = false) {
         if (!Array.isArray(values) || !values.length || values.some((value) => typeof value !== 'string' || !value.trim())) {
           throw new AppError('Os valores da opção devem ser uma lista de textos.')
         }
-        updates.values = values.map((value) => value.trim()).join(',')
+        if (values.some((value) => value.trim().length > 255)) {
+          throw new AppError('Cada valor da opção deve ter no máximo 255 caracteres.')
+        }
+        updates.values = [...new Set(values.map((value) => value.trim()))]
       }
       if (Object.keys(updates).length === 2) throw new AppError('Informe campos para atualizar a opção.')
       return updates
@@ -102,6 +123,9 @@ function normalizeOptions(options, partial = false) {
     const values = option.values ?? option.value
     if (!Array.isArray(values) || !values.length || values.some((value) => typeof value !== 'string' || !value.trim())) {
       throw new AppError(`A opção ${option.title} precisa conter uma lista de valores.`)
+    }
+    if (values.some((value) => value.trim().length > 255)) {
+      throw new AppError('Cada valor da opção deve ter no máximo 255 caracteres.')
     }
     const shape = option.shape || 'square'
     const type = option.type || 'text'
@@ -115,7 +139,7 @@ function normalizeOptions(options, partial = false) {
       shape,
       radius: parseRadius(option.radius),
       type,
-      values: values.map((value) => value.trim()).join(','),
+      values: [...new Set(values.map((value) => value.trim()))],
     }
   })
 }
@@ -135,7 +159,15 @@ function normalizeImages(images) {
     if (typeof image.content !== 'string' || !image.content.trim()) {
       throw new AppError('Cada imagem precisa informar o campo content.')
     }
-    return { id: image.id, deleted: false, path: image.content.trim() }
+    if (image.type !== undefined && typeof image.type !== 'string') {
+      throw new AppError('O tipo da imagem deve ser um texto.')
+    }
+    return {
+      id: image.id,
+      deleted: false,
+      content: image.content.trim(),
+      type: image.type,
+    }
   })
 }
 
@@ -207,7 +239,7 @@ function serializeOption(option) {
     shape: option.shape,
     radius: option.radius,
     type: option.type,
-    values: option.values.split(',').filter(Boolean),
+    values: (option.optionValues || []).map((item) => item.value),
   }
 }
 
@@ -257,6 +289,46 @@ async function syncChildren(model, productId, items, transaction, fields) {
   }
 }
 
+async function syncOptions(productId, options, transaction) {
+  if (!options) return
+  const current = await ProductOption.findAll({ where: { product_id: productId }, transaction })
+  const currentById = new Map(current.map((option) => [option.id, option]))
+
+  for (const option of options) {
+    const { values, id, deleted, ...attributes } = option
+    if (id !== undefined) {
+      const existing = currentById.get(Number(id))
+      if (!existing) throw new AppError('Uma imagem ou opção informada não pertence a este produto.')
+      currentById.delete(Number(id))
+      if (deleted) {
+        await existing.destroy({ transaction })
+      } else {
+        const updates = { ...attributes }
+        if (values !== undefined) {
+          updates.values = values.join(',')
+        }
+        if (Object.keys(updates).length) await existing.update(updates, { transaction })
+        if (values !== undefined) {
+          await ProductOptionValue.destroy({ where: { option_id: existing.id }, transaction })
+          await ProductOptionValue.bulkCreate(
+            values.map((value) => ({ option_id: existing.id, value })),
+            { transaction },
+          )
+        }
+      }
+    } else if (!deleted) {
+      const created = await ProductOption.create(
+        { product_id: productId, ...attributes, values: values.join(',') },
+        { transaction },
+      )
+      await ProductOptionValue.bulkCreate(
+        values.map((value) => ({ option_id: created.id, value })),
+        { transaction },
+      )
+    }
+  }
+}
+
 exports.search = asyncHandler(async (req, res) => {
   const { limit, page, offset } = parsePagination(req.query)
   const where = { enabled: true }
@@ -283,18 +355,42 @@ exports.search = asyncHandler(async (req, res) => {
     include[0].required = true
   }
 
-  const optionFilter = Object.entries(req.query).find(([key]) => /^option\[\d+\]$/.test(key))
-  if (optionFilter) {
-    const optionId = Number(optionFilter[0].match(/\d+/)[0])
-    const acceptedValues = String(optionFilter[1]).split(',').map((value) => value.trim()).filter(Boolean)
-    if (!acceptedValues.length) throw new AppError('Informe pelo menos um valor para filtrar a opção.')
-    include[2].where = {
-      id: optionId,
-      [Op.or]: acceptedValues.map((value) =>
-        sequelizeWhere(fn('FIND_IN_SET', value, col('options.values')), { [Op.gt]: 0 }),
-      ),
+  const optionFilterEntries = Object.entries(req.query).flatMap(([key, rawValues]) => {
+    const literalMatch = key.match(/^option\[(\d+)\]$/)
+    if (literalMatch) return [[literalMatch[1], rawValues]]
+    if (key === 'option' && Array.isArray(rawValues)) {
+      return rawValues.flatMap((value, index) => (
+        value === undefined ? [] : [[String(index), value]]
+      ))
     }
-    include[2].required = true
+    if (key === 'option' && rawValues && typeof rawValues === 'object' && !Array.isArray(rawValues)) {
+      return Object.entries(rawValues)
+    }
+    return []
+  })
+  const optionFilters = optionFilterEntries.map(([rawId, rawValues]) => {
+      const optionId = parseReferenceId(rawId, 'option')
+      const candidates = Array.isArray(rawValues) ? rawValues : [rawValues]
+      const values = [...new Set(candidates.flatMap((candidate) => {
+        if (typeof candidate !== 'string') throw new AppError('Os filtros de opção devem conter textos.')
+        return candidate.split(',').map((value) => value.trim()).filter(Boolean)
+      }))]
+      if (!values.length) throw new AppError('Informe pelo menos um valor para filtrar a opção.')
+      if (values.some((value) => value.length > 255)) {
+        throw new AppError('Cada valor do filtro de opção deve ter no máximo 255 caracteres.')
+      }
+      return { optionId, values }
+    })
+  if (optionFilters.length) {
+    where[Op.and] = optionFilters.map(({ optionId, values }) => {
+      const escapedValues = values.map((value) => sequelize.escape(value)).join(', ')
+      const productIds = sequelize.literal(
+        `(SELECT po.product_id FROM product_options AS po `
+        + 'INNER JOIN product_option_values AS pov ON pov.option_id = po.id '
+        + `WHERE po.id = ${optionId} AND pov.value IN (${escapedValues}))`,
+      )
+      return sequelize.where(sequelize.col('Product.id'), { [Op.in]: productIds })
+    })
   }
 
   const fields = req.query.fields
@@ -330,9 +426,12 @@ exports.show = asyncHandler(async (req, res) => {
 
 exports.create = asyncHandler(async (req, res) => {
   const values = validateProduct(req.body)
-  const { category_ids: categoryIds, images, options, ...attributes } = values
+  let preparedImages = { images: values.images, createdFiles: [] }
   const transaction = await sequelize.transaction()
   try {
+    preparedImages = await prepareImages(values.images)
+    values.images = preparedImages.images
+    const { category_ids: categoryIds, images, options, ...attributes } = values
     const product = await Product.create(attributes, { transaction })
     if (categoryIds.length) {
       const categories = await Category.findAll({ where: { id: categoryIds }, transaction })
@@ -340,19 +439,18 @@ exports.create = asyncHandler(async (req, res) => {
       await product.setCategories(categories, { transaction })
     }
     await syncChildren(ProductImage, product.id, images, transaction, (image) => ({ path: image.path, enabled: true }))
-    await syncChildren(ProductOption, product.id, options, transaction, (option) => ({
-      title: option.title,
-      shape: option.shape,
-      radius: option.radius,
-      type: option.type,
-      values: option.values,
-    }))
+    await syncOptions(product.id, options, transaction)
     const created = await Product.findByPk(product.id, { include: associations, transaction })
     const response = serializeProduct(created)
     await transaction.commit()
     return res.status(201).json(response)
   } catch (error) {
     await transaction.rollback()
+    try {
+      await removePreparedImages(preparedImages)
+    } catch (cleanupError) {
+      console.error('Não foi possível remover imagens após falha ao criar produto:', cleanupError)
+    }
     throw error
   }
 })
@@ -369,8 +467,11 @@ exports.update = asyncHandler(async (req, res) => {
   ) {
     throw new AppError('Informe ao menos um campo para atualizar.')
   }
+  let preparedImages = { images: values.images, createdFiles: [] }
   const transaction = await sequelize.transaction()
   try {
+    preparedImages = await prepareImages(values.images)
+    values.images = preparedImages.images
     const product = await Product.findByPk(id, { transaction })
     if (!product) throw new AppError('Produto não encontrado.', 404)
     const { category_ids: categoryIds, images, options, ...attributes } = values
@@ -384,15 +485,16 @@ exports.update = asyncHandler(async (req, res) => {
       ...(image.path !== undefined ? { path: image.path } : {}),
       ...(image.path !== undefined ? { enabled: true } : {}),
     }))
-    await syncChildren(ProductOption, id, options, transaction, (option) => ({
-      ...Object.fromEntries(['title', 'shape', 'radius', 'type', 'values']
-        .filter((field) => option[field] !== undefined)
-        .map((field) => [field, option[field]])),
-    }))
+    await syncOptions(id, options, transaction)
     await transaction.commit()
     return res.status(204).end()
   } catch (error) {
     await transaction.rollback()
+    try {
+      await removePreparedImages(preparedImages)
+    } catch (cleanupError) {
+      console.error('Não foi possível remover imagens após falha ao atualizar produto:', cleanupError)
+    }
     throw error
   }
 })

@@ -2,6 +2,7 @@ require('dotenv').config()
 
 const express = require('express')
 const cors = require('cors')
+const path = require('path')
 const swaggerUi = require('swagger-ui-express')
 const AppError = require('./utils/AppError')
 const users = require('./routes/users')
@@ -11,6 +12,7 @@ const openapi = require('./docs/openapi')
 const errorHandler = require('./middleware/errorHandler')
 
 const app = express()
+app.set('query parser', 'simple')
 const allowedOrigins = (process.env.FRONTEND_URL || 'http://localhost:5173')
   .split(',')
   .map((origin) => origin.trim())
@@ -21,6 +23,7 @@ app.use(cors({
     return callback(new AppError('Origem não autorizada pelo CORS.', 403))
   },
 }))
+app.use('/media', express.static(path.resolve(__dirname, '..', 'uploads'), { index: false }))
 app.use(express.json({ limit: '2mb' }))
 app.use((req, res, next) => {
   if (

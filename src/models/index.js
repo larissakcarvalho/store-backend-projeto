@@ -5,6 +5,7 @@ const Category = require('./Category')(sequelize)
 const Product = require('./Product')(sequelize)
 const ProductImage = require('./ProductImage')(sequelize)
 const ProductOption = require('./ProductOption')(sequelize)
+const ProductOptionValue = require('./ProductOptionValue')(sequelize)
 const ProductCategory = require('./ProductCategory')(sequelize)
 
 Product.belongsToMany(Category, {
@@ -23,5 +24,16 @@ Product.hasMany(ProductImage, { foreignKey: 'product_id', as: 'images', onDelete
 ProductImage.belongsTo(Product, { foreignKey: 'product_id', as: 'product' })
 Product.hasMany(ProductOption, { foreignKey: 'product_id', as: 'options', onDelete: 'CASCADE' })
 ProductOption.belongsTo(Product, { foreignKey: 'product_id', as: 'product' })
+ProductOption.hasMany(ProductOptionValue, { foreignKey: 'option_id', as: 'optionValues', onDelete: 'CASCADE' })
+ProductOptionValue.belongsTo(ProductOption, { foreignKey: 'option_id', as: 'option' })
 
-module.exports = { sequelize, User, Category, Product, ProductImage, ProductOption, ProductCategory }
+module.exports = {
+  sequelize,
+  User,
+  Category,
+  Product,
+  ProductImage,
+  ProductOption,
+  ProductOptionValue,
+  ProductCategory,
+}

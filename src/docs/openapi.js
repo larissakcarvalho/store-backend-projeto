@@ -61,7 +61,8 @@ module.exports = {
         type: 'object',
         properties: {
           id: { type: 'integer' },
-          content: { type: 'string', description: 'URL da imagem ou conteúdo base64.' },
+          type: { type: 'string', description: 'Tipo da imagem enviada, por exemplo image/png.' },
+          content: { type: 'string', description: 'URL da imagem, caminho salvo ou conteúdo base64.' },
           deleted: { type: 'boolean' },
         },
       },
@@ -212,7 +213,7 @@ module.exports = {
           { name: 'match', in: 'query', schema: { type: 'string' } },
           { name: 'category_ids', in: 'query', schema: { type: 'string' } },
           { name: 'price-range', in: 'query', schema: { type: 'string', example: '100-200' } },
-          { name: 'option[ID]', in: 'query', schema: { type: 'string' }, description: 'Filtra pelos valores de uma opção, por exemplo option[45]=GG,PP.' },
+          { name: 'option[ID]', in: 'query', schema: { type: 'string' }, description: 'Filtra pelos valores de uma opção, por exemplo option[45]=GG,PP. Pode combinar vários IDs; cada filtro de ID deve corresponder ao produto.' },
         ],
         responses: { 200: { description: 'Lista paginada de produtos' } },
       },
