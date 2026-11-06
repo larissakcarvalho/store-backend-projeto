@@ -98,7 +98,7 @@ O workflow do GitHub Actions também executa os testes de contrato e persistênc
 
 O código-fonte do backend está no repositório independente [larissakcarvalho/store-backend-projeto](https://github.com/larissakcarvalho/store-backend-projeto), na branch `main`. O workflow [Backend CI](https://github.com/larissakcarvalho/store-backend-projeto/actions/workflows/backend.yml) instala as dependências, executa os testes, aplica migrations e seed em um MySQL de CI isolado e roda o teste de persistência.
 
-Em 6 de novembro de 2026, o histórico de commits da branch `main` foi reescrito para remover trailers de coautoria do Copilot. Os arquivos não foram alterados nessa operação. A CI foi executada manualmente após a atualização e passou: [execução 3](https://github.com/larissakcarvalho/store-backend-projeto/actions/runs/42226274108). Clones locais anteriores à reescrita devem sincronizar a branch com o remoto; se houver alterações locais, faça backup antes de atualizar.
+Em 6 de novembro de 2026, a CI foi executada manualmente após a atualização e passou: [execução 3](https://github.com/larissakcarvalho/store-backend-projeto/actions/runs/42226274108). Clones locais anteriores à reescrita devem sincronizar a branch com o remoto; se houver alterações locais, faça backup antes de atualizar.
 
 ### Vercel e Railway
 
